@@ -1,4 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import {
+  getAddress,
+  getNetwork,
+  isConnected,
+  requestAccess,
+} from "@stellar/freighter-api";
 import "./App.css";
 
 type Visit = {
@@ -17,8 +23,25 @@ const PATIENT_ADDRESS =
 const DENTIST_ADDRESS =
   "GBUCZP6ZABFQURZ5XYDGGGVHVN5L2EUISASQQ2RIWOIYFFIWPJDT5SQ6";
 
+function getFreighterError(error: unknown) {
+  if (!error) {
+    return "Unknown Freighter error.";
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return "Freighter returned an unexpected error.";
+}
+
 function App() {
   const [walletAddress, setWalletAddress] = useState("");
+  const [networkName, setNetworkName] = useState("Not connected");
   const [status, setStatus] = useState("Ready to manage dental history.");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -41,18 +64,88 @@ function App() {
     await new Promise((resolve) => setTimeout(resolve, 700));
   };
 
+  useEffect(() => {
+    const checkWallet = async () => {
+      try {
+        const connection = await isConnected();
+
+        if (connection.error || !connection.isConnected) {
+          return;
+        }
+
+        const network = await getNetwork();
+
+        if (!network.error && network.network) {
+          setNetworkName(network.network);
+        }
+
+        const addressResult = await getAddress();
+
+        if (addressResult.error || !addressResult.address) {
+          return;
+        }
+
+        setWalletAddress(addressResult.address);
+        setPatientAddress(addressResult.address);
+        setStatus("Freighter wallet already connected.");
+      } catch {
+        setStatus("Ready to manage dental history.");
+      }
+    };
+
+    void checkWallet();
+  }, []);
+
   const connectWallet = async () => {
     setError("");
     setIsLoading(true);
-    setStatus("Connecting wallet...");
+    setStatus("Connecting Freighter wallet...");
 
     try {
-      await fakeDelay();
+      const connection = await isConnected();
 
-      setWalletAddress(PATIENT_ADDRESS);
-      setStatus("Demo wallet connected. Freighter integration comes next.");
-    } catch {
-      setError("Could not connect wallet. Please install or unlock Freighter.");
+      if (connection.error) {
+        throw new Error(getFreighterError(connection.error));
+      }
+
+      if (!connection.isConnected) {
+        throw new Error(
+          "Freighter extension was not detected. Please install Freighter and unlock your wallet."
+        );
+      }
+
+      const accessResult = await requestAccess();
+
+      if (accessResult.error) {
+        throw new Error(getFreighterError(accessResult.error));
+      }
+
+      if (!accessResult.address) {
+        throw new Error("Could not read wallet address from Freighter.");
+      }
+
+      const network = await getNetwork();
+
+      if (!network.error && network.network) {
+        setNetworkName(network.network);
+      }
+
+      setWalletAddress(accessResult.address);
+      setPatientAddress(accessResult.address);
+
+      if (network.network && network.network !== "TESTNET") {
+        setStatus(
+          "Wallet connected, but please switch Freighter network to TESTNET for this demo."
+        );
+      } else {
+        setStatus("Freighter wallet connected successfully on Testnet.");
+      }
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not connect wallet. Please install or unlock Freighter."
+      );
       setStatus("Wallet connection failed.");
     } finally {
       setIsLoading(false);
@@ -149,7 +242,7 @@ function App() {
 
           <div className="heroActions">
             <button onClick={connectWallet} disabled={isLoading}>
-              {walletAddress ? "Wallet connected" : "Connect demo wallet"}
+              {walletAddress ? "Wallet connected" : "Connect Freighter"}
             </button>
             <a
               href="https://stellar.expert/explorer/testnet"
@@ -165,7 +258,12 @@ function App() {
         <div className="contractCard">
           <p className="cardLabel">Contract address</p>
           <p className="mono">{CONTRACT_ADDRESS}</p>
-          <p className="network">Network: Stellar Testnet</p>
+
+          <p className="cardLabel walletLabel">Connected wallet</p>
+          <p className="mono">{walletAddress || "Not connected yet"}</p>
+
+          <p className="cardLabel walletLabel">Wallet network</p>
+          <p className="mono">{networkName}</p>
         </div>
       </section>
 
